@@ -249,7 +249,7 @@ app.post("/toggle-record/:id", (req, res) => {
 });
 
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
+  console.log("User Connected",socket.id);
 });
 
 server.listen(PORT, () =>
