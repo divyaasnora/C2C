@@ -6,6 +6,7 @@ const path = require("path");
 const ping = require("ping");
 const http = require("http");
 
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -95,6 +96,7 @@ app.post("/check-ip", async (req, res) => {
   const { ip } = req.body;
   const result = await ping.promise.probe(ip, { timeout: 3 });
   res.json({ online: result.alive });
+  console.log(ip);
 });
 
 // Start stream
