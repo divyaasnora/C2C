@@ -1,13 +1,14 @@
-
+import { io } from "socket.io-client";
+const socket = io("http://localhost:5000");
 import MultiCamera from "./components/MultiCamera";
-import CameraFeed from "./components/Recorder";
+export default function App(){
+  return(
+    <>
+    <MultiCamera socket={socket}/>
 
-export default function App() {
-  return (
-    <div style={{ padding: "20px" }}>
-      
-      <MultiCamera />
-      <CameraFeed/>
-    </div>
-  );
+    </>
+  )
 }
+
+
+

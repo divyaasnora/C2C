@@ -1,0 +1,17 @@
+# ✅ ENABLE API (VERY IMPORTANT)
+api: yes
+apiAddress: :9997
+
+# ✅ ENABLE WEBRTC
+webrtc: yes
+webrtcAddress: :8889
+
+# (optional but useful)
+rtsp: yes
+hls: yes
+
+paths:
+  all:
+    record: yes
+    recordPath: ./recordings/%path/%Y-%m-%d_%H-%M-%S
+    recordFormat: fmp4

@@ -1,0 +1,104 @@
+/* ============================= */
+/* CAMERA TILE */
+/* ============================= */
+
+.camera-tile {
+  position: relative;
+  background: #111827;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 2px solid #1f2937;
+  box-shadow: 0 0 15px rgba(0,0,0,0.6);
+  transition: 0.3s ease;
+}
+
+.camera-tile:hover {
+  transform: scale(1.02);
+  border-color: #38bdf8;
+}
+
+/* ============================= */
+/* VIDEO */
+/* ============================= */
+
+.camera-video {
+  width: 100%;
+  display: block;
+}
+
+/* ============================= */
+/* ALARM OVERLAY */
+/* ============================= */
+
+.alarm-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 0, 0, 0.5);
+  border: 4px solid red;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: white;
+  font-size: 22px;
+  font-weight: bold;
+  z-index: 5;
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0% { opacity: 1; }
+  50% { opacity: 0.4; }
+  100% { opacity: 1; }
+}
+
+/* ============================= */
+/* RECORD BUTTON */
+/* ============================= */
+
+.rec-btn {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 10;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: none;
+  font-weight: bold;
+  cursor: pointer;
+  background: #374151;
+  color: white;
+  transition: 0.2s ease;
+}
+
+.rec-btn.recording {
+  background: red;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 5px red; }
+  50% { box-shadow: 0 0 20px red; }
+  100% { box-shadow: 0 0 5px red; }
+}
+
+/* ============================= */
+/* CLOSE BUTTON */
+/* ============================= */
+
+.close-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 10;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: none;
+  background: #374151;
+  color: white;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.close-btn:hover {
+  background: red;
+}

@@ -5,7 +5,9 @@ const fs = require("fs");
 const path = require("path");
 const ping = require("ping");
 const http = require("http");
+const axios = require("axios");
 
+const { recognizeFace } = require("./faceService/faceRecognition");
 
 const app = express();
 app.use(cors());
@@ -17,23 +19,29 @@ const server = http.createServer(app);
 const { Server } = require("socket.io");
 const io = new Server(server, { cors: { origin: "*" } });
 
+/* ================= FOLDERS ================= */
 
-const HLS_ROOT = path.join(__dirname, "hls");
-if (!fs.existsSync(HLS_ROOT)) fs.mkdirSync(HLS_ROOT);
+const RECORDINGS_DIR = path.join(__dirname, "recordings");
+if (!fs.existsSync(RECORDINGS_DIR)) fs.mkdirSync(RECORDINGS_DIR);
 
-app.use("/hls", express.static(HLS_ROOT));
+/* ================= MEDIAMTX ================= */
 
-const ffmpegStreamMap = {};
+const MEDIAMTX_API = "http://localhost:9997";
+
+/* ================= MEMORY ================= */
+
 const recordingProcesses = {};
-const detectionProcesses = {};
+const faceIntervals = {};
 
-/* ================= RTSP TEMPLATES ================= */
+/* ================= RTSP ================= */
+
 const RTSP_TEMPLATES = [
   "rtsp://{user}:{pass}@{ip}:554/cam/realmonitor?channel=1&subtype=0",
   "rtsp://{user}:{pass}@{ip}:554/h264/ch1/main/av_stream",
 ];
 
-/* ================= HELPERS ================= */
+/* ================= TEST RTSP ================= */
+
 function testRTSP(rtspUrl) {
   return new Promise((resolve) => {
     const ff = spawn("ffmpeg", [
@@ -48,212 +56,186 @@ function testRTSP(rtspUrl) {
   });
 }
 
+/* ================= FIND WORKING RTSP ================= */
+
 async function findWorkingRTSP(ip, user, pass) {
   for (const template of RTSP_TEMPLATES) {
-    const rtspUrl = template
+    const url = template
       .replace("{ip}", ip)
       .replace("{user}", user)
       .replace("{pass}", pass);
 
-    if (await testRTSP(rtspUrl)) {
-      return rtspUrl;
-    }
+    if (await testRTSP(url)) return url;
   }
   return null;
 }
 
-/* ================= PYTHON DETECTION ================= */
-function runDetection(cameraId, rtspUrl) {
-  const py = spawn("python", ["./python/detect.py", rtspUrl]);
+/* ================= FACE DETECTION ================= */
 
-  detectionProcesses[cameraId] = py;
+async function detectFace(rtspUrl, cameraId) {
+  const snapshot = path.join(__dirname, `snap_${cameraId}.jpg`);
 
-  py.stdout.on("data", (data) => {
-    const msg = data.toString().trim();
+  const ff = spawn("ffmpeg", [
+    "-y",
+    "-rtsp_transport", "tcp",
+    "-i", rtspUrl,
+    "-frames:v", "1",
+    "-q:v", "2",
+    snapshot
+  ]);
 
-    if (msg === "ALARM" || msg === "CLEAR") {
-      io.emit("detection", {
-        cameraId,
-        status: msg,
-      });
-      console.log("Detection:", cameraId, msg);
+  ff.on("close", async () => {
+    if (!fs.existsSync(snapshot)) return;
+
+    const result = await recognizeFace(snapshot);
+
+    if (!result || !result.result) {
+      fs.unlink(snapshot, () => {});
+      return;
     }
-  });
 
-  py.stderr.on("data", (err) => {
-    console.error("Python error:", err.toString());
-  });
+    const faces = result.result;
 
-  py.on("close", () => {
-    delete detectionProcesses[cameraId];
+    if (faces.length > 0 && faces[0].subjects?.length > 0) {
+      const person = faces[0].subjects[0];
+
+      console.log("✅ Recognized:", person.subject);
+
+      io.emit("face-event", {
+        cameraId,
+        type: "recognized",
+        name: person.subject,
+        similarity: person.similarity
+      });
+
+    } else {
+      console.log("❌ Unknown face");
+
+      io.emit("face-event", {
+        cameraId,
+        type: "unknown"
+      });
+    }
+
+    fs.unlink(snapshot, () => {});
   });
 }
 
-/* ================= ROUTES ================= */
+/* ================= CHECK IP ================= */
 
-// Check IP
 app.post("/check-ip", async (req, res) => {
   const { ip } = req.body;
   const result = await ping.promise.probe(ip, { timeout: 3 });
   res.json({ online: result.alive });
-  console.log(ip);
 });
 
-// Start stream
+/* ================= START STREAM ================= */
+
 app.post("/start-stream", async (req, res) => {
   try {
     const { ip, username, password } = req.body;
 
     const rtspUrl = await findWorkingRTSP(ip, username, password);
-    if (!rtspUrl) return res.status(400).json({ error: "RTSP not detected" });
+    if (!rtspUrl) return res.status(400).json({ error: "RTSP failed" });
 
-    const streamId = Date.now().toString();
-    const streamDir = path.join(HLS_ROOT, streamId);
-    fs.mkdirSync(streamDir, { recursive: true });
+    const id = Date.now().toString();
 
-    const m3u8Path = path.join(streamDir, "stream.m3u8");
+    console.log("🎥 RTSP:", rtspUrl);
 
-    const ffmpeg = spawn("ffmpeg", [
-      "-rtsp_transport", "tcp",
-      "-i", rtspUrl,
-      "-an",
-      "-c:v", "libx264",
-      "-preset", "ultrafast",
-      "-tune", "zerolatency",
-      "-g", "15",
-      "-f", "hls",
-      "-hls_time", "2",
-"-hls_list_size", "50",
-"-hls_flags", "append_list+delete_segments",
+    // 👉 Add to MediaMTX
+    await axios.post(`${MEDIAMTX_API}/v3/config/paths/add/${id}`, {
+      source: rtspUrl,
+      sourceOnDemand: false,
+    });
 
-      m3u8Path,
-    ]);
+    // 👉 Start face detection loop
+    faceIntervals[id] = setInterval(() => {
+      detectFace(rtspUrl, id);
+    }, 4000); // every 4 sec
 
-    ffmpegStreamMap[streamId] = ffmpeg;
-
-    runDetection(streamId, rtspUrl);
-
-    const wait = setInterval(() => {
-      if (fs.existsSync(m3u8Path)) {
-        clearInterval(wait);
-        res.json({
-          streamId,
-          streamUrl: `http://localhost:${PORT}/hls/${streamId}/stream.m3u8`,
-          rtsp: rtspUrl,
-        });
-      }
-    }, 300);
+    res.json({
+      streamId: id,
+      webrtcUrl: `http://localhost:8889/${id}/`,
+      rtsp: rtspUrl
+    });
 
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error" });
+    console.error(err.response?.data || err.message);
+    res.status(500).json({ error: "Stream failed" });
   }
 });
 
-// Stop stream
-app.post("/stop-stream/:id", (req, res) => {
+/* ================= STOP STREAM ================= */
+
+app.post("/stop-stream/:id", async (req, res) => {
   const { id } = req.params;
 
-  if (ffmpegStreamMap[id]) {
-    ffmpegStreamMap[id].kill("SIGINT");
-    delete ffmpegStreamMap[id];
-  }
+  try {
+    await axios.post(`${MEDIAMTX_API}/v3/config/paths/remove/${id}`);
+  } catch {}
 
-  if (detectionProcesses[id]) {
-    detectionProcesses[id].kill("SIGINT");
-    delete detectionProcesses[id];
+  if (faceIntervals[id]) {
+    clearInterval(faceIntervals[id]);
+    delete faceIntervals[id];
   }
 
   res.json({ stopped: true });
 });
 
-// Recording toggle
+/* ================= RECORD ================= */
+
 app.post("/toggle-record/:id", (req, res) => {
   const { id } = req.params;
   const { rtspUrl } = req.body;
 
-  if (!rtspUrl) {
-    return res.status(400).json({ error: "RTSP URL missing" });
-  }
-
-  //Stop Recording
   if (recordingProcesses[id]) {
-    const recorder = recordingProcesses[id];
-
-    console.log("Stopping recording:", id);
-
-    // Gracefully stop ffmpeg
-    recorder.stdin.write("q");
-    recorder.stdin.end();
-
-    recorder.on("close", () => {
-      console.log("Recording finalized:", id);
-      delete recordingProcesses[id];
-    });
-
-  return res.json({ recording: false });
+    recordingProcesses[id].stdin.write("q");
+    recordingProcesses[id].stdin.end();
+    delete recordingProcesses[id];
+    return res.json({ recording: false });
   }
 
-  ///Start Recording
-  const recordingsDir = path.join(__dirname, "recordings");
+  const file = path.join(RECORDINGS_DIR, `rec_${id}.mp4`);
 
-  if (!fs.existsSync(recordingsDir)) {
-    fs.mkdirSync(recordingsDir);
-  }
+  const rec = spawn("ffmpeg", [
+    "-rtsp_transport", "tcp",
+    "-i", rtspUrl,
+    "-an",
+    "-c:v", "libx264",
+    "-preset", "ultrafast",
+    "-movflags", "+faststart",
+    "-y",
+    file
+  ]);
 
-  const filePath = path.join(
-    recordingsDir,
-    `record_${id}_${Date.now()}.mp4`
-  );
-
-  console.log("Starting recording:", filePath);
-
-
- 
- const recorder = spawn(
-    "ffmpeg",
-    [
-      "-rtsp_transport", "tcp",
-      "-fflags", "+genpts",
-      "-avoid_negative_ts", "make_zero",
-      "-use_wallclock_as_timestamps", "1",
-      "-i", rtspUrl,
-
-      "-map", "0:v:0",        
-      "-c:v", "copy",         
-      "-an",                 
-
-      "-movflags", "+faststart+frag_keyframe+empty_moov",
-      "-flush_packets", "1",
-      "-muxdelay", "0",
-
-      filePath
-    ],
-    {
-      stdio: ["pipe", "pipe", "pipe"]
-    }
-  )
-
-
-  recordingProcesses[id] = recorder;
-
-  recorder.on("close", (code) => {
-    console.log("Recording stopped:", id, "Code:", code);
-    delete recordingProcesses[id];
-  });
-
-  recorder.on("error", (err) => {
-    console.error("FFmpeg error:", err);
-    delete recordingProcesses[id];
-  });
+  recordingProcesses[id] = rec;
 
   res.json({ recording: true });
 });
 
-io.on("connection", (socket) => {
-  console.log("User Connected",socket.id);
+/* ================= RECORDINGS ================= */
+
+app.get("/recordings-list", (req, res) => {
+  const files = fs.readdirSync(RECORDINGS_DIR);
+
+  const result = files.map((file) => ({
+    file,
+    url: `http://localhost:${PORT}/recordings/${file}`
+  }));
+
+  res.json(result);
 });
 
-server.listen(PORT, () =>
-  console.log(`Server running on http://localhost:${PORT}`)
-);
+app.use("/recordings", express.static(RECORDINGS_DIR));
+
+/* ================= SOCKET ================= */
+
+io.on("connection", (socket) => {
+  console.log("Socket connected:", socket.id);
+});
+
+/* ================= START SERVER ================= */
+
+server.listen(PORT, () => {
+  console.log("🚀 Server running on port", PORT);
+});

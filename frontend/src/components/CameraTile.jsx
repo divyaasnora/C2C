@@ -1,110 +1,48 @@
-import { useEffect, useRef, useState } from "react";
-import Hls from "hls.js";
-import axios from "axios";
+import { useState } from "react";
 
-export default function CameraTile({ cam, socket, onClose }) {
-  const videoRef = useRef(null);
-  const [detectionStatus, setDetectionStatus] = useState("CLEAR");
+export default function CameraTile({ cam, onClose }) {
   const [isRecording, setIsRecording] = useState(false);
 
-  // ================= HLS INIT =================
-  useEffect(() => {
-    if (videoRef.current && cam.streamUrl) {
-      if (Hls.isSupported()) {
-        const hls = new Hls();
-        hls.loadSource(cam.streamUrl);
-        hls.attachMedia(videoRef.current);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          videoRef.current.play();
-        });
-        return () => hls.destroy();
-      } else if (videoRef.current.canPlayType("application/vnd.apple.mpegurl")) {
-        videoRef.current.src = cam.streamUrl;
-        videoRef.current.play();
-      }
-    }
-  }, [cam.streamUrl]);
-
-  // ================= SOCKET DETECTION =================
-  useEffect(() => {
-  if (!socket) return;
-
-  const handler = (data) => {
-    if (String(data.cameraId) === String(cam.id)) {
-      setDetectionStatus(data.status);
-    }
-  };
-
-  socket.on("detection", handler);
-  return () => socket.off("detection", handler);
-}, [socket, cam]);
-
-  // ================= RECORDING =================
   const toggleRecording = async () => {
-    const res = await axios.post(
+    const res = await fetch(
       `http://localhost:5000/toggle-record/${cam.id}`,
       {
-        rtspUrl: cam.rtsp,
-      
-
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rtspUrl: cam.rtsp }),
       }
     );
-    setIsRecording(res.data.recording);
+
+    const data = await res.json();
+    setIsRecording(data.recording);
   };
-    console.log("RTSP being sent:", cam.rtsp);
-  // ================= UI =================
+
   return (
-    <div
-      style={{
-        position: "relative",
-        border: "2px solid #0a010be5",
-        background: "#0a010be5",
-        borderRadius: "8px",
-        overflow: "hidden",
-      }}
-    >
-      <video
-        ref={videoRef}
-        muted
-        autoPlay
-        playsInline
-        controls
-        style={{ width: "100%", display: "block" }}
+    <div className="relative bg-black rounded-xl overflow-hidden">
+
+      {/* 🔥 WEBRTC STREAM */}
+      <iframe
+        src={cam.webrtcUrl}
+        className="w-full h-64"
+        allow="autoplay; fullscreen; camera; microphone"
       />
 
-      {/* 🔴 RED OVERLAY WHEN ALARM */}
-      {detectionStatus === "ALARM" && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            background: "rgba(255,0,0,0.45)",
-            border: "4px solid red",
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-            color: "white",
-            fontSize: "28px",
-            fontWeight: "bold",
-            zIndex: 5,
-          }}
-        >
-          🚨 MOTION DETECTED 🚨
-        </div>
-      )}
-
+      {/* RECORD BUTTON */}
       <button
         onClick={toggleRecording}
-        style={{ position: "absolute", top: 10, left: 10, zIndex: 10 }}
+        className={`absolute bottom-2 left-2 px-3 py-1 text-white text-xs rounded ${
+          isRecording ? "bg-red-600" : "bg-gray-700"
+        }`}
       >
-        {isRecording ? "STOP REC" : "REC"}
+        {isRecording ? "⏹ STOP" : "⏺ REC"}
       </button>
 
+      {/* CLOSE */}
       <button
         onClick={onClose}
-        style={{ position: "absolute", top: 10, right: 10, zIndex: 10 }}
+        className="absolute top-2 right-2 bg-red-500 text-white px-2 py-1 text-xs rounded"
       >
-        X
+        ✖
       </button>
     </div>
   );
